@@ -1,0 +1,6 @@
+creation_rules:
+  - path_regex: .*/test-.*/us-east-1/secrets.yaml
+    kms: arn:aws:kms:us-east-1:********:key/1167613f-10fc-45dc-9bcf-6e8404ac6c05
+
+  - path_regex: .*/settings/.*
+    kms: arn:aws:kms:us-east-1:********:key/1167613f-10fc-45dc-9bcf-6e8404ac6c05

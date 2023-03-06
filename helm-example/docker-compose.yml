@@ -1,0 +1,25 @@
+version: '2'
+
+services:
+  search-frontend:
+    image: nexus.************.com:5000/search-frontend:1.10.0-RELEASE
+    network_mode: host
+
+  search-backend:
+    image: nexus.************.com:5000/search-backend:1.10.0-RELEASE
+    network_mode: host
+    environment:
+      - spring.data.elasticsearch.hostname=https://search-non-prod-public.us-east-1.es.amazonaws.com
+      - spring.data.elasticsearch.port=443
+      - arg.client.location=http://172.31.6.250:8080
+
+  wel-search-manager:
+    image: nexus.************.com:5000/search-manager:1.10.0-RELEASE
+    network_mode: host
+    environment:
+      - spring.datasource.url=jdbc:postgresql://3-us-east-1.non-prod.************.com:5432/rch2
+      - spring.datasource.username=*******
+      - spring.datasource.password=*******
+      - spring.data.elasticsearch.hostname=https://search-non-prod-public.us-east-1.es.amazonaws.com
+      - spring.data.elasticsearch.port=443
+      - spring.profiles.active=docker

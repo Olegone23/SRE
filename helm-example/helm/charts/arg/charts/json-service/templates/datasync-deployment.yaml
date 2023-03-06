@@ -1,0 +1,61 @@
+{{- if .Values.dataSync.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "json-service.fullname" . }}-datasync
+  labels:
+    {{- include "json-service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.dataSync.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "json-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "json-service.selectorLabels" . | nindent 8 }}
+      annotations:
+        iam.amazonaws.com/role: {{ .Values.dataSync.iamRole }}
+      {{- if .Values.global.ingress.enabled }}
+        sidecar.istio.io/inject: "false"
+      {{- end }}
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ include "json-service.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: {{ include "json-service.fullname" . }}-volume
+          persistentVolumeClaim:
+            claimName: {{ include "json-service.fullname" . }}
+      containers:
+        - name: {{ .Chart.Name }}-datasync
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ .Values.dataSync.image }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          resources:
+            {{- toYaml .Values.dataSync.resources | nindent 12 }}
+          volumeMounts:
+            - name: {{ include "json-service.fullname" . }}-volume
+              mountPath: {{ .Values.contentPath }}
+          command: ["/bin/sh"]
+          args:
+            - "-c"
+            - "while true; do aws s3 sync {{ .Values.dataSync.source }} {{ .Values.contentPath }} --delete && echo 'Refresh done'; sleep {{ .Values.dataSync.refreshPeriod }}; done"
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- end }}

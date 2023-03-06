@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "json-service.fullname" . }}
+  labels:
+    {{- include "json-service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "json-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "json-service.selectorLabels" . | nindent 8 }}
+      annotations:
+      {{- if .Values.global.ingress.enabled }}
+        sidecar.istio.io/inject: "false"
+      {{- end }}
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ include "json-service.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: {{ include "json-service.fullname" . }}-volume
+          persistentVolumeClaim:
+            claimName: {{ include "json-service.fullname" . }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+          - name: http
+            containerPort: {{ .Values.image.containerPort }}
+            protocol: TCP
+          {{- if .Values.global.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.image.livenessPath }}
+              port: http
+            failureThreshold: 5
+            periodSeconds: 15
+          startupProbe:
+            httpGet:
+              path: {{ .Values.image.livenessPath }}
+              port: http
+            failureThreshold: 15
+            periodSeconds: 10
+          {{- end }}
+          env:
+            {{- range $key, $val := .Values.env }}
+            - name: {{ $key }}
+              value: {{ tpl ($val | toString) $ | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: {{ include "json-service.fullname" . }}-volume
+              mountPath: {{ .Values.contentPath }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}

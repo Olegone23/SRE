@@ -1,0 +1,27 @@
+{{- if .Values.global.istio.enabled -}}
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ include "session-converter.fullname" . }}
+  labels:
+    {{- include "session-converter.labels" . | nindent 4 }}
+spec:
+  gateways:
+    - {{ .Values.global.istio.gatewayName }}
+    - mesh
+  hosts:
+  - {{ .Values.global.hosts.uri | quote }}
+  http:
+  - match:
+    - uri:
+        prefix: /arg-converter/
+    - uri: 
+        prefix: /arg-converter
+    rewrite:
+      uri: "/"
+    route:
+    - destination:
+        host: {{ include "session-converter.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: {{ .Values.service.port }}
+{{- end }}

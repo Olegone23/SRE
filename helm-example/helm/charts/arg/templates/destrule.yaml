@@ -1,0 +1,18 @@
+{{- if .Values.global.istio.enabled }}
+apiVersion: "networking.istio.io/v1beta1"
+kind: DestinationRule
+metadata:
+  name: {{ include "wel-arg.fullname" . }}-rabbit
+  labels:
+    {{- include "wel-arg.labels" . | nindent 4 }}
+spec:
+  host: "{{ (index .Values.global "rabbit_variables" "arg.rabbit.server") }}"
+  trafficPolicy:
+    portLevelSettings:
+    - port:
+        number: 5672
+      tls:
+        mode: DISABLE
+    tls:
+      mode: DISABLE
+{{- end }}

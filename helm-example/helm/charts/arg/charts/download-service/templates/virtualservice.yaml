@@ -1,0 +1,23 @@
+{{- if .Values.istio.enabled -}}
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ include "download-service.fullname" . }}
+  labels:
+    {{- include "download-service.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.istio.host | quote }}
+  gateways:
+    - {{ .Values.istio.gatewayName }}
+    - mesh
+  http:
+  - match:
+    - uri: 
+        prefix: {{ .Values.istio.prefix }}
+    route:
+    - destination:
+        host: {{ include "download-service.fullname" . }}
+        port:
+          number: {{ .Values.service.port }}
+{{- end }}
