@@ -1,0 +1,29 @@
+---
+
+- name: Disable ICMP redirect support
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+  with_items:
+    - {name: "net.ipv4.conf.all.accept_redirects", value: 0}
+    - {name: "net.ipv4.conf.default.accept_redirects", value: 0}
+    - {name: "net.ipv4.conf.all.secure_redirects", value: 0}
+    - {name: "net.ipv4.conf.default.secure_redirects", value: 0}
+
+- name: Disable TCP timestamp
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+  with_items:
+    - {name: "net.ipv4.tcp_timestamps", value: 0}
+
+- name: Disable SELinux in configs
+  replace:
+    path: "{{ item }}"
+    regexp: '^SELINUX=enforcing'
+    replace: 'SELINUX=disabled'
+  with_items:
+    - '/etc/selinux/config'
+    - '/etc/sysconfig/selinux'

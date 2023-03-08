@@ -1,0 +1,27 @@
+---
+
+- name: Download installer script
+  shell: "aws s3 cp s3://aws-{{ cloud }}-***/do_blobs/dynatrace/gh/Dynatrace.sh /opt/downloads/"
+  args:
+    creates: /opt/downloads/Dynatrace.sh
+
+- name: Change permissions
+  file:
+    path: /opt/downloads/Dynatrace.sh
+    mode: 0755
+
+- name: Install Dynatrace
+  shell: "/opt/downloads/Dynatrace.sh APP_LOG_CONTENT_ACCESS=1 INFRA_ONLY=0"
+  args:
+    creates: /etc/systemd/system/oneagent.service
+
+- name: Copying metainformation script
+  copy:
+    src: meta.sh
+    dest: /usr/local/bin
+    mode: a+x
+
+- name: Adding AWS tags to dynatrace oneagent
+  shell: /usr/local/bin/meta.sh
+  notify:
+    - restart oneagent

@@ -1,0 +1,27 @@
+---
+- name: Copy Elastic repo
+  copy:
+    src: elastic.repo
+    dest: /etc/yum.repos.d/elastic.repo
+
+- name: Add Elastic gpg key
+  rpm_key:
+    state: present
+    key: https://packages.elastic.co/GPG-KEY-elasticsearch
+
+- name: Install Filebeat
+  yum:
+    name: filebeat
+    state: latest
+
+- name: Copy Filebeat settings
+  copy:
+   src: "filebeat_{{ env }}.yml"
+   dest: /etc/filebeat/filebeat.yml
+
+- name: Enable and start Filebeat
+  service:
+    name: filebeat
+    state: started
+    enabled: yes
+  ignore_errors: yes

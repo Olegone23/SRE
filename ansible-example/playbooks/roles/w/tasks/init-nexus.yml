@@ -1,0 +1,86 @@
+---
+- name: Create appdata user
+  user:
+    name: appdata
+    groups: jenkins
+    shell: /bin/false
+    createhome: no
+    system: yes
+
+- name: Create directory
+  file:
+    path: /opt/software/gh
+    state: directory
+    owner: appdata
+    group: appdata
+    mode: 0755
+
+- name: Change ownership for log directory
+  file:
+    path: /opt/logs
+    state: directory
+    owner: appdata
+    group: appdata
+    mode: 0755
+
+- name: get file extension
+  shell: curl -s "http://nexus.aws.gh.com:8081/nexus/service/local/lucene/search?g=com.gh.gh&a={{ svc_name }}&v={{ app_ver }}&repositoryId={{ build|lower }}s"|grep extension|grep -v pom| tr -d /| awk -F "<extension>" '{print $2}'
+  register: extension
+
+- name: set systemd for {{ svc_name }}
+  blockinfile:
+    create: yes
+    path: "/etc/systemd/system/{{svc_name}}.service"
+    block: |
+      [Unit]
+      Description={{ svc_name }}
+      After=network.target
+
+      [Service]
+      Type=simple
+      WorkingDirectory=/opt/software/gh/
+      User=appdata
+      ExecStart=/usr/bin/java $JAVA_OPTS -jar {{svc_name}}.{{ extension.stdout }} $SPRING_OPTS
+      EnvironmentFile=/opt/software/gh/{{svc_name}}.conf
+      EnvironmentFile=/opt/software/gh/{{svc_name}}-spring.conf
+
+      [Install]
+      WantedBy=multi-user.target
+  when:
+    - init == "true"
+
+- name: Reload systemd units
+  shell: systemctl daemon-reload
+
+- name: Enable service
+  service:
+    name: "{{ svc_name }}"
+    enabled: yes
+
+- name: add jenkins to sudo
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    insertafter: EOF
+    line: 'jenkins  ALL=(appdata) NOPASSWD:SETENV:ALL'
+    backup: yes
+
+- name: Add appdata user to sudoers
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    insertafter: EOF
+    line: 'appdata  ALL=(ALL) NOPASSWD: /usr/bin/systemctl start {{ svc_name }}.service, /usr/bin/systemctl stop {{ svc_name }}.service, /usr/bin/systemctl restart {{ svc_name }}.service, /sbin/alternatives'
+    backup: yes
+
+- name: Enable crontab remove workaround for gh app logs
+  cron:
+    name: "Remove {{ item }}"
+    minute: "5"
+    hour: "3"
+    job: "find /opt/logs/{{ item }}* -mtime +30 -exec rm -rf {} \\; "
+  with_items:
+    - "*.log"
+    - "*.gz"
+  become_method: sudo
+  become_user: appdata

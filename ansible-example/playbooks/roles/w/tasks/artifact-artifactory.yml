@@ -1,0 +1,51 @@
+---
+- name: get file extension
+  shell: curl -s "https://artifactory.aws.gh.com/artifactory/api/search/gavc?g=com.gh.gh&a={{ svc_name  }}&v={{ app_ver }}&repos=maven-local" | grep uri | grep -v pom |  awk '{ print $3 }' | tr -d '"'  | grep -Eo "\.\w+$" | tr -d '.'
+  register: extension
+
+- name: Ensure that application artifacts have been removed
+  file:
+    path: "/opt/software/gh/{{ svc_name }}.{{ extension.stdout }}"
+    state: absent
+  become: true
+  become_method: sudo
+  become_user: appdata
+
+- name: copy config
+  copy:
+    src: "{{ item }}"
+    dest: "/opt/software/gh/"
+    owner: appdata
+    group: appdata
+    mode: 0644
+  become: true
+  become_method: sudo
+  become_user: appdata
+  with_fileglob:
+    - "{{env}}/{{svc_name}}/*"
+  when:
+    - jdk_version is undefined or svc_name == 'gh-cbarchival' or svc_name == 'gh-course-org' or svc_name == 'gh-ecommerce'
+
+- name: copy config
+  copy:
+    src: "{{ item }}"
+    dest: "/opt/software/gh/"
+    owner: appdata
+    group: appdata
+    mode: 0644
+  become: true
+  become_method: sudo
+  become_user: appdata
+  with_fileglob:
+    - "{{env}}/{{svc_name}}/jdk{{jdk_version}}/*"
+  when:
+    - jdk_version is defined and (svc_name != 'gh-cbarchival' or svc_name != 'gh-course-org' or svc_name != 'gh-ecommerce')
+
+- name: Download artifact from Artifactory
+  get_url:
+    url: "https://artifactory.aws.gh.com/artifactory/maven-local/com/gh/gh/{{ svc_name }}/{{ app_ver }}/{{ svc_name }}-{{ app_ver }}.{{ extension.stdout }}"
+    dest: "/opt/software/gh/{{ svc_name }}.{{ extension.stdout }}"
+  become: true
+  become_method: sudo
+  become_user: appdata
+

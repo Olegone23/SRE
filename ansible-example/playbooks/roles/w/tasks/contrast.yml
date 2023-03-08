@@ -1,0 +1,19 @@
+---
+
+- name: Download Contrast Security JAR
+  shell: "aws s3 cp s3://aws-{{ cloud }}-gh/do_blobs/contrast/contrast.jar /opt/software/gh/"
+  args:
+    creates: /opt/software/gh/contrast.jar
+  become: true
+  become_method: sudo
+  become_user: appdata
+
+- name: "Change file owner/permission"
+  file:
+    path: /opt/software/gh/contrast.jar
+    owner: appdata
+    group: appdata
+    mode: 0644
+  become: true
+  become_method: sudo
+  become_user: appdata

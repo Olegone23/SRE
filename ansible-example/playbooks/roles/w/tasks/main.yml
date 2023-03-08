@@ -1,0 +1,45 @@
+---
+- name: stop gh
+  shell: "sudo -u appdata sudo /usr/bin/systemctl stop {{ svc_name }}.service"
+  ignore_errors: yes
+
+- name: Initial setup
+  include_tasks: "init.yml"
+  when:
+    - init == "true"
+
+- name: Set init JDK version
+  include_tasks: "set-jdk11.yml"
+  when:
+    - init == "true" and (svc_name == 'gh-course-setup-app' or svc_name == 'gh-auth-service' or svc_name == 'gh-courses' or svc_name == 'gh-canvas' or svc_name == 'gh-notifications' or svc_name == 'gh-announcements' or svc_name == 'gh-sso' or svc_name == 'gh-auth' or svc_name == 'gh-content' or svc_name == 'gh-meta' or svc_name == 'gh-search' or svc_name == 'gh-ecommerce')
+
+- name: Artifact deploy
+  include_tasks: "artifact.yml"
+
+- name: switch to OpenJDK 8
+  shell: echo 1 | sudo -u appdata sudo alternatives --config java
+  when:
+    - init != "true" and (svc_name == 'gh-courses' or svc_name == 'gh-canvas' or svc_name == 'gh-course-setup-app' or svc_name == 'gh-auth-service' or svc_name == 'gh-notifications' or svc_name == 'gh-announcements' or svc_name == 'gh-sso' or svc_name == 'gh-auth' or svc_name == 'gh-content' or svc_name == 'gh-meta' or svc_name == 'gh-search')
+  ignore_errors: yes
+
+- name: Switch JDK version
+  include_tasks: "switch-jdk.yml"
+  when:
+    - jdk_version is defined and (svc_name != 'gh-cbarchival' and svc_name != 'gh-course-org' and svc_name != 'gh-ecommerce')
+
+- name: Add Contrast Security JAR
+  include_tasks: "contrast.yml"
+  when:
+    - (env == 'wdev' or env == 'wqa') and svc_name == 'gh-lti'
+
+- name: start gh
+  shell: "sudo -u appdata sudo /usr/bin/systemctl start {{ svc_name }}.service"
+
+- name: Check application status
+  uri:
+    url: "{{ services[svc_name] }}"
+    status_code: 200
+  register: result
+  until: result.status == 200
+  retries: 25
+  delay: 10

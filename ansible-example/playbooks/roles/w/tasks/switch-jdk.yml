@@ -1,0 +1,10 @@
+---
+- name: switch to OpenJDK 8
+  shell: echo 1 | sudo -u appdata sudo alternatives --config java
+  when:
+    - jdk_version == '8'
+
+- name: switch to OpenJDK 11
+  shell: echo 2 | sudo -u appdata sudo alternatives --config java
+  when:
+    - jdk_version == '11'

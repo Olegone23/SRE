@@ -1,0 +1,29 @@
+pipeline {
+    agent none
+    stages {
+        stage("Build service"){
+            steps {
+                echo 'BUILT!'
+            }
+        }
+        stage("Nexus deploy"){
+            steps {
+                timeout(time: 1, unit: 'DAYS') {
+                    input 'Deploy artifacts in Nexus?'
+                }
+                echo 'DEPLOYED!'
+            }
+        }
+        stage('QA tests') {
+            steps {
+                timeout(time: 1, unit: 'DAYS') {
+                    input 'Run QA tests?'
+                }
+                build job: 'NG/***-GA-app-deploy', parameters: [string(name: 'ENV_NAME', value: 'wqa'), [$class: 'WHideParameterValue', name: 'BUILD_TYPE', value: 'RELEASE'], string(name: 'SVC_NAME', value: SERVICE), string(name: 'APP_VER', value: VERSION)]
+                node('master') {
+                    triggerRemoteJob enhancedLogging: true, job: 'NG/run-devops-tests', maxConn: 1, remoteJenkinsName: 'TX Jenkins', useCrumbCache: true, useJobInfoCache: true
+                }
+            }
+        }
+    }
+}

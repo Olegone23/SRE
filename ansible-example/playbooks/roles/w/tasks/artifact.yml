@@ -1,0 +1,25 @@
+---
+- name: artifact artifactory
+  include_tasks: "artifact-artifactory.yml"
+  when:
+    - svc_name == 'gh-cbarchival' or svc_name == 'gh-course-setup-app' or svc_name == 'gh-auth-service' or svc_name == 'gh-course-org' or svc_name == 'gh-courses' or svc_name == 'gh-canvas' or svc_name == 'gh-notifications' or svc_name == 'gh-announcements' or svc_name == 'gh-sso' or svc_name == 'gh-auth' or svc_name == 'gh-search' or svc_name == 'gh-content' or svc_name == 'gh-meta' or svc_name == 'gh-ecommerce' or (build_repo is defined and build_repo == 'artifactory')
+
+- name: artifact nexus
+  include_tasks: "artifact-nexus.yml"
+  when:
+    - svc_name != 'gh-cbarchival'
+    - svc_name != 'gh-course-setup-app'
+    - svc_name != 'gh-auth-service'
+    - svc_name != 'gh-course-org'
+    - svc_name != 'gh-courses'
+    - svc_name != 'gh-canvas'
+    - svc_name != 'gh-notifications'
+    - svc_name != 'gh-announcements'
+    - svc_name != 'gh-sso'
+    - svc_name != 'gh-auth'
+    - svc_name != 'gh-content'
+    - svc_name != 'gh-meta'
+    - svc_name != 'gh-search'
+    - svc_name != 'gh-ecommerce'
+    - build_repo is undefined or (build_repo is defined and build_repo == 'nexus')
+

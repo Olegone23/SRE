@@ -1,0 +1,26 @@
+---
+# vars file for logstash
+sqs_nonprod:
+- 'LS_SQS_QUEUE=KNL-ELK-LOGS-NONPROD'
+
+sqs_prod:
+- 'LS_SQS_QUEUE=KNL-ELK-LOGS-PROD'
+
+files:
+- 00-input-application.conf
+- 01-input-access.conf
+- 02-input-lti.conf
+- 03-input-mgw.conf
+- 10-filters-application.conf
+- 11-filters-access.conf
+- 12-filters-lti.conf
+- 13-filters-mgw.conf
+- 30-output-sqs.conf
+
+logstash:
+- 'LS_OPTS=--allow-env'
+- 'LS_ACCESS_FILE_PATH=/opt/software/tomcat/current/logs/localhost_access_log.*'
+- 'LS_LTI_LOG_FILE_PATH=/opt/logs/gh-lti.log'
+- 'LS_LOG_FILE_PATH=/opt/logs/gh-*.log'
+- 'LS_MGW_FILE_PATH=/opt/logs/edgemicro-*.*'
+- 'KILL_ON_STOP_TIMEOUT=1'

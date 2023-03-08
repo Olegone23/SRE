@@ -1,0 +1,31 @@
+# NTP/Postfix section START
+- name: "OS: install/configure ntpd and postfix"
+  yum:
+    name: ['postfix', 'ntp', 'unzip']
+    state: installed
+
+- service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: yes
+  with_items:
+  - postfix
+  - ntpd
+- replace:
+    dest: /etc/ntp.conf
+    regexp: '^server '
+    replace: '#server '
+- lineinfile:
+    dest: "{{ item.dest }}"
+    line: "{{ item.line }}"
+  with_items:
+  - { dest: '/etc/postfix/main.cf', line: 'relayhost = smtpgate.gh.com' }
+  - { dest: '/etc/ntp.conf', line: 'server nbu_master.gh.com' }
+- service:
+    name: "{{ item }}"
+    state: started
+  with_items:
+  - postfix
+  - ntpd
+
+# NTP/Postfix section END

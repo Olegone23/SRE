@@ -1,0 +1,77 @@
+---
+- name: upgrade all packages
+  yum:
+    name: '*'
+    state: latest
+    exclude: python-urllib3*
+
+- name: install cfn boostrap scripts
+  yum:
+    name: "{{ item }}"
+    state: installed
+  with_items:
+  - https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.amzn1.noarch.rpm
+  - curl
+  - jq
+  ignore_errors: true
+
+- name: make cfn helpers executable
+  shell: "chmod +x /opt/aws/bin/*"
+
+- name: create base dirs
+  file:
+    dest: "{{ item }}"
+    state: directory
+    mode: 0755
+  with_items:
+  - /opt/misc
+
+- name: "copy app executable"
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: 0755
+    owner: nobody
+    group: nobody
+  with_items:
+  - { src: 'get-stack.sh', dest: '/opt/misc/get-stack.sh' }
+
+- name: make rc.local executable
+  file:
+    path: /etc/rc.d/rc.local
+    state: touch
+    mode: 0755
+
+- name: register stack Name
+  shell: "/opt/misc/get-stack.sh"
+  register: stack
+
+- name: register region
+  shell: "curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r '.region'"
+  register: region
+
+- name: configure rc.local
+  blockinfile:
+    path: /etc/rc.d/rc.local
+    block: |
+      \#!/bin/bash
+      package-cleanup -y --oldkernels --count=1
+      /opt/aws/bin/cfn-signal -e 0 --stack {{ stack.stdout }} --resource ServiceGroup --region {{ region.stdout }}
+
+- name: enable rc.local
+  systemd:
+    name: rc-local
+    enabled: yes
+    daemon-reload: yes
+
+- name: create symlink for python
+  shell: "{{ item }}"
+  with_items:
+  - "ln -s /usr/local/lib/python2.7/site-packages/cfnbootstrap /usr/lib/python2.7/site-packages/cfnbootstrap"
+  - "chmod +x /opt/aws/bin/*"
+
+- name: restart
+  command: /sbin/shutdown -r now
+  async: 0
+  poll: 0
+  ignore_errors: true

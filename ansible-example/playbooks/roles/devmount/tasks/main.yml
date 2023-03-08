@@ -1,0 +1,9 @@
+---
+# tasks file for devmount
+- name: mount xvd disks
+  include_tasks: "ebs.yml"
+  when: ansible_facts["devices"].keys()[0][0:3] == "xvd"
+
+- name: mount nvme disks
+  include_tasks: "nvme.yml"
+  when: ansible_facts["devices"].keys()[0][0:3] != "xvd"

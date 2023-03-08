@@ -1,0 +1,14 @@
+<IfModule  mod_proxy.c>
+
+ProxyPass / http://gh-private-ga-app-qa-alb.aws.gh.com/
+ProxyPassReverse / http://gh-private-ga-app-qa-alb.aws.gh.com/
+
+ProxyRequests     Off
+AllowEncodedSlashes Off
+
+<Proxy http://gh-private-ga-app-qa-alb.aws.gh.com/*>
+  Order deny,allow
+  Allow from all
+</Proxy>
+
+</IfModule>

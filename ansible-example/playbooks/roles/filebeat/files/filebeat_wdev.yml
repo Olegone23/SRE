@@ -1,0 +1,35 @@
+filebeat.prospectors:
+- type: log
+  enabled: true
+  paths:
+    - /opt/logs/gh*
+  exclude_files: ['\.gz$']
+  multiline.pattern: '^\[[0-9]{4}-[0-9]{2}-[0-9]{2}'
+  multiline.negate: true
+  multiline.match: after
+ 
+- type: log
+  enabled: true
+  paths:
+    - /opt/logs/localhost_access*
+  exclude_files: ['\.gz$']
+    
+- type: log
+  enabled: true
+  paths:
+    - /opt/logs/edgemicro-*
+  exclude_files: ['\.gz$']
+
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+output.kafka:
+  enabled: true
+  hosts: ["JUP-KAFKAD-1.aws.gh.com:9092", "JUP-KAFKAD-2.aws.gh.com:9092", "JUP-KAFKAD-3.aws.gh.com:9092"]
+  topic: "gh"
+  partition.round_robin:
+  reachable_only: false
+  max_message_bytes: 1000000
+  required_acks: 1
+  client_id: gh

@@ -1,0 +1,399 @@
+#!/usr/bin/env bash
+
+export http_proxy=http://proxy-dev.aws.***.com:8080
+export https_proxy=http://proxy-dev.aws.***.com:8080
+export NO_PROXY="169.254.169.254,.aws.***.com,localhost,127.0.0.1"
+export ANSIBLE_HOST_KEY_CHECKING=False
+export downtime=false
+
+# export product_name_prefix=$(echo "$1" | tr -d ' ')
+# declare args=$@
+# declare rollout_method="ansible"
+
+failure    () { echo "$@" ; exit 1;}
+full_scan  () { cmd="/bin/aws --region=us-east-1 servicecatalog scan-provisioned-products  --access-level-filter Key=Account,Value=self" ;
+                $cmd ; npt=$($cmd | /usr/local/bin/jq -r '.NextPageToken')
+                while [ $npt != "null"  ];
+                do
+                  $cmd --page-token "$npt" ; npt=$($cmd --page-token "$npt" | /usr/local/bin/jq -r '.NextPageToken')
+                done ;
+}
+precheck   () { test "$cloud" == "prod" && set_prod ;}
+
+########### ATTENTION!!!! ##########
+# set_prod   () { /bin/aws sts assume-role --role-arn arn:aws:iam::***:role/aws-prod-devops-resource-ec2 --role-session-name "RoleSessionname" | /usr/local/bin/jq .Credentials > ./prod_creds
+#                 export     AWS_ACCESS_KEY_ID="$(/usr/local/bin/jq -r .AccessKeyId prod_creds)"
+#                 export    AWS_SECURITY_TOKEN="$(/usr/local/bin/jq -r .SessionToken prod_creds)"
+#                 export AWS_SECRET_ACCESS_KEY="$(/usr/local/bin/jq -r .SecretAccessKey prod_creds)"
+#                 rm prod_creds ; }
+usage       () { echo -en "usage:
+      $0 -n <ProductNamePrefix> -r <PathToRole> [-e 'var1=value var2=value .. varN=value'] [-P ] [-D ]
+      $0 -n 'as-rolesrv-wperf-' -r ./roles/as-app/ -e 'cloud=nonprod srv_name=roleservice app_ver=1.0.0'
+    -n : specifies product-name, requires argument
+    -r : specifies path to ansible roles, requires argument
+    -e : extra variables, requires argument
+    -D : sets 'downtime' option
+    -P : sets 'prod' option
+    -A : sets 'attach' option - if set, the instances will be attached to LBs even in case the playbook or role fails
+"
+}
+
+get_stack  () { product_name_prefix="$1"
+                product_data=$(full_scan | \
+                               /usr/local/bin/jq -r --arg prefix $product_name_prefix '.ProvisionedProducts[] |  select(.Name | startswith ($prefix))'
+                              )
+                stack=$(echo $product_data | /usr/local/bin/jq -r '.Name' | tr '\n' ' ' )
+                # debug:
+                #  echo $stack | tee ./remote_exec_dubug && exit 101
+                #
+                if [ -z "$product_data" ]; then
+                    exit 100
+              elif (echo "$stack" | grep -E --quiet '^\S* \S.*'); then
+                    echo "$stack" && exit 101
+              elif [ -z "$stack" ]; then
+                    exit 102
+                fi
+                last_rec_id=$(echo $product_data | /usr/local/bin/jq -r '.LastRecordId' )
+                cf_stack_name=$(/bin/aws --region=us-east-1 servicecatalog describe-record --id $last_rec_id | \
+                                /usr/local/bin/jq '.RecordOutputs[].OutputValue' | cut -f 2 -d "/"
+                               )
+                product_status=$(echo $product_data | /usr/local/bin/jq -r '.Status')
+                if [ -z "$last_rec_id" ] || \
+                   [ -z "$cf_stack_name" ]; then
+                     exit 103
+              elif [ "$product_status" != "AVAILABLE" ]; then
+                     echo "Name: $stack  -  Status: $product_status" && exit 104
+              elif [ -z "$cf_stack_name" ]; then
+                     exit 105;
+                fi
+                echo ${cf_stack_name}
+              }
+
+elb_operate () {  cmd=$1
+                  unit=$2
+                  instances=$3
+
+                  function elb_type  () {   if (echo $unit | grep --quiet '^arn.*' );
+                                            then
+                                                echo "target"
+                                            else
+                                                echo "classic"
+                                            fi
+                                        }
+                  function detect-id () {  name=$1
+                                          if [ "$#" -ne 1 ]; then
+                                            echo "error:  No balancer specified. cannot proceed" && failure
+                                          fi
+                                          if [ $(elb_type) == "classic" ];then
+                                              elb_check () { /bin/aws --region=us-east-1 elb describe-load-balancers --load-balancer-names $name | \
+                                                             /usr/local/bin/jq -r .LoadBalancerDescriptions[].Instances[].InstanceId ;}
+                                          elif [ $(elb_type) == "target" ];then
+                                              elb_check () { /bin/aws --region=us-east-1 elbv2 describe-target-health --target-group-arn $name | \
+                                                             /usr/local/bin/jq -r '.TargetHealthDescriptions[].Target.Id' ;}
+                                          fi
+                                          ec2_list=$(elb_check $name)
+                                          if [ -z "$ec2_list" ];then
+                                            return 201
+                                            exit 201
+                                            #  echo "It looks like there are no EC2 attached to specified load balancer" && failure
+                                          fi
+                                          elb_check
+                                        }
+                  function detect-ip () { /bin/aws --region=us-east-1 ec2 describe-instances --instance-ids $1 | \
+                                          /usr/local/bin/jq -r '.Reservations[] | .Instances[]| .NetworkInterfaces[] | .PrivateIpAddresses[] | .PrivateIpAddress '
+                                                     }
+                  function attach   ()  {
+                                          elb=$1
+                                          echo "info:   ELB - Attach"
+                                          echo "           Processing ELB: $1"
+                                          echo "           with instances: $instance_ids"
+                                          if [ $(elb_type) == "classic" ]; then
+                                              /bin/aws --region=us-east-1 elb register-instances-with-load-balancer --load-balancer-name $1 --instances $instance_ids # > /dev/null 2>&1
+                                          elif [ $(elb_type) == "target" ]; then
+                                              /bin/aws --region=us-east-1 elbv2 register-targets --target-group-arn $1 --targets $(echo $instance_ids | sed -e 's/^/Id=/;s/\ / Id=/g') # > /dev/null 2>&1
+                                          fi
+                                        }
+                  function detach   ()  {
+                                          elb=$1
+                                          echo "info:   ELB - Detach"
+                                          echo "            - - - "
+                                          echo "            detaching \"$instances\"  from \"$1\""
+                                          echo "            - - - "
+                                          if [ $(elb_type) == "classic" ]; then
+                                               /bin/aws --region=us-east-1 elb deregister-instances-from-load-balancer --load-balancer-name $1 --instances $instances # > /dev/null 2>&1
+                                          elif [ $(elb_type) == "target" ]; then
+                                               /bin/aws --region=us-east-1 elbv2 deregister-targets --target-group-arn $1 --targets $(echo $instances | sed -e 's/^/Id=/;s/\ / Id=/g') # > /dev/null 2>&1
+                                          fi ;}
+                  function elb_main () { $cmd $unit $instances ;}
+                  elb_main
+                  }
+                            # =^.^=
+make_it_happen () {
+                  echo "+ - - - -"
+                  echo -en '|\n|\n'
+                  echo "info:   Fetching data with provided SC product name prefix - \"$product_name_prefix\""
+                  stack_name=$(get_stack "$product_name_prefix")
+
+                  # echo "debug: product_data is $(full_scan | \
+                  #                                /usr/local/bin/jq -r --arg prefix $product_name_prefix '.ProvisionedProducts[] |  select(.Name | contains ($prefix))')"
+                  # echo "debug: stack is $(echo $product_data | /usr/local/bin/jq -r '.Name')"
+                  # echo "debug: $()"
+                  # echo "debug: $()"
+                  # case $(stack_name=$(get_stack) && echo $?) in
+                  case $? in
+                    100) echo -en "error:  Nothing found, try again later or specify another name prefix\n" && exit 100 ;;
+                    101) echo -en "error:  There must be just a single stack but I see there are a few:\n"; for name in $stack_name; do echo "            - $name";done && exit 101 ;;
+                    102) echo -en "error:  Stack was found but I couldn't fetch it's name. Aborting now. \n            $product_name_prefix \n" && exit 102 ;;
+                    103) echo -en "error:  Couldn't fetch record_id and cf_stack_name. Aborting now.\n" && exit 103 ;;
+                    104) echo -en "error:  Stack is not available:\n            $stack_name \n" && exit 104 ;;
+                    105) echo -en "error:  Unexpected error - couldn't fetch cloudformation stack name (SC-XXX-XXX):\n            $stack_name" && exit 105 ;;
+                  esac
+
+                  blocks=$(/bin/aws --region=us-east-1 cloudformation describe-stacks --stack-name ${stack_name} | \
+                           /usr/local/bin/jq '.Stacks[].Parameters'
+                          )
+                  hcheck_type=$(echo    $blocks | /usr/local/bin/jq -r '.[] | select(.ParameterKey | contains ("HealthCheckType")) | .ParameterValue')
+                  asg_capacity=$(echo   $blocks | /usr/local/bin/jq -r '.[] | select(.ParameterKey | contains ("DesiredCapacity")) | .ParameterValue')
+                  elb_name=$(echo       $blocks | /usr/local/bin/jq -r '.[] | select(.ParameterKey | contains ("ELBNames"))        | .ParameterValue')
+                  target_group=$(echo   $blocks | /usr/local/bin/jq -r '.[] | select(.ParameterKey | contains ("TargetGroup")) | .ParameterValue')
+                  component_name=$(echo $blocks | /usr/local/bin/jq -r '.[] | select(.ParameterKey | contains ("ComponentName"))   | .ParameterValue')
+
+                  if  [ -z "$elb_name" ] && \
+                      [ -z "$target_group" ] && \
+                      [ -z "$component_name" ];
+                    then
+                    echo "error:  Can't determine type; Likely you don't have ComponentName/ELB/TargetGroupARNs set" && failure
+                  fi
+
+                  single="False"
+                  multiple="False"
+                  standalone="False"
+
+                  if  [ ! -z "$elb_name" ] || [ ! -z "$target_group" ];
+                  then
+                        echo "info:   ELB(s) Detected - $elb_name $target_group"
+
+                        declare -A idHash
+                        declare -a elbArr; for ELB in $(echo $elb_name | sed -e 's/,/ /g' ); do elbArr+=("$ELB"); done
+
+                        for i in $(elb_operate detect-id ${elbArr[0]} $target_group);
+                        do
+                            ip_detected=$(elb_operate detect-ip $i)
+                            idHash[$i]+="$ip_detected" ;
+                        done
+                        declare -a idArr="($(echo ${!idHash[@]}))"
+                        if [ ${#idArr[@]} -eq 0 ]; then failure "error:  No instances found ($elb_name). Aborting" ; fi
+                        echo "info:   entities found (behind LB):"
+                        for i in ${idArr[@]};
+                        do
+                         echo "            ID: $i   IP_ADDRESS: ${idHash[$i]}"
+                        done
+
+                        # echo "+===========+"
+                        # echo "debug:  of Arrays:"
+                        # echo "\$idHash keys are ${!idHash[@]}"
+                        # echo "\$idHash values are ${idHash[@]}"
+                        # echo "\$idArr elements are ${idArr[@]}"
+
+                        if [ "$downtime" == "true" ];
+                        then
+                          export slice="${#idArr[@]}"
+                          echo "debug:  Downtime enabled, slice = $slice"
+                        elif   [ ${#idArr[@]} -gt 1 ] && [ $((${#idArr[@]} % 2)) -eq 1 ];
+                         then
+                          export slice=$(( (${#idArr[@]}-1)/2 ))
+                          export multiple="true"
+                        elif [ ${#idArr[@]} -gt 1 ] && [ $((${#idArr[@]} % 2)) -eq 0 ];
+                         then
+                          export slice=$(( ${#idArr[@]}/2 ))
+                          export multiple="true"
+                        elif [ ${#idArr[@]} -eq 1 ] ;
+                        then
+                          export slice="1"
+                          export single="true"
+                        fi
+
+                  elif ([ -z "$elb_name" ] && [ -z "$target_group" ]) ; then
+                    echo "info:   Stanalone EC2 detected - $component_name(.aws.***.com)"
+                    standalone="true"
+                  fi
+
+                  echo "info:   Rollout procedure starts"
+                  # echo "           please see detected instances:"
+
+                  while :
+                  do
+                    # CASE 1\
+                    # echo "debug: : Your instance is running w.o. ASG - $standalone"
+                    # echo "debug: : You have multiple EC2s in ASG - $multiple"
+                    # echo "debug: : You have a single EC2 in ASG - $single"
+                    # echo "-------- LOOP STARTS HERE ---------"
+                    sleep 3
+
+                    if [ $standalone == "true" ];
+                    then
+                      ansible_ad_hoc "$role_name" "$component_name.aws.***.com," "$extra_vars"
+                      case $? in
+                        106) echo -en "error:  ansible execution failed" && exit 106 ;;
+                      esac
+                      break
+                    fi
+                    # CASE 2
+
+                    if [ $multiple == "true" ] || \
+                       [ $single == "true" ] || \
+                       [ $downtime == "true" ];
+                    then
+                      echo "debug:  ASG Scenario - step 1"
+                      echo "debug:  -- slice is $slice --"
+                      export instance_ids=$(echo "${idArr[@]:0:$slice}")
+                      instance_ips=$(for i in $instance_ids; do  echo ${idHash[$i]};done | tr '\n' ' '; echo '')
+                      echo "debug:  -- instance_ids: $instance_ids --"
+                      echo "debug:  -- instance_ips: $instance_ips --"
+                      # create_inventory ""$instance_ips""
+                      #
+                      # ELB LOOP STARTS HERE
+                      for ELB in ${elbArr[@]} $(echo $target_group | sed 's/,/ /'); do
+                        elb_operate detach $ELB "$instance_ids"
+                      done
+                      # ELB LOOP ENDS HERE
+                        ansible_ad_hoc "$role_name" "$(echo $instance_ips | tr ' ' ',' | tr '\n' ',')" "$extra_vars"
+                        case $? in
+                          106) echo -en "error:  ansible execution failed" && exit 106 ;;
+                        esac
+                            # if [ "${ansible-failed}" == "true" ]; then
+                            #     echo "error:"
+                            #     echo "       Ansible exec failed."
+                            #     echo "       Your instance is still detached from ELB (in case it's a clustered and balanced component)"
+                            #     echo "       exit 1" && exit 1
+                            # fi
+                      # ELB LOOP STARTS HERE
+                      for ELB in ${elbArr[@]} $(echo $target_group | sed 's/,/ /'); do
+                         elb_operate attach $ELB "$instance_ids"
+                      done
+                      # ELB LOOP ENDS HERE
+                      echo "debug:  ASG scenario 1 competed"
+                    fi
+                    # CASE 3
+                  if [ $single == "true" ] || [ $downtime == "true" ] || [ -z "$instance_ids" ]; then break;
+                  else
+                      echo "debug:  ASG Scenario - step 2"
+                      instance_ids=$(echo "${idArr[@]:$slice}")
+                      instance_ips=$(for i in $instance_ids; do echo ${idHash[$i]}; done | tr '\n' ' '; echo '')
+                      echo "debug:  -- instance_ids: $instance_ids --"
+                      echo "debug:  -- instance_ips: $instance_ips --"
+                      # create_inventory ""$instance_ips""
+                      # ELB LOOP STARTS HERE
+                      for ELB in ${elbArr[@]} $(echo $target_group | sed 's/,/ /'); do
+                        elb_operate detach $ELB "$instance_ids"
+                      done
+                      # ELB LOOP ENDS HERE
+                        ansible_ad_hoc "$role_name" "$(echo $instance_ips | tr ' ' ',' | tr '\n' ',')" "$extra_vars"
+                        case $? in
+                          106) echo -en "error:  ansible execution failed" && exit 106 ;;
+                        esac
+                        # if [ "${ansible-failed}" == "true" ]; then
+                        #     echo "error:"
+                        #     echo "       Ansible exec failed."
+                        #     echo "       Your instance is still detached from ELB (in case it's a clustered and balanced component)"
+                        #     echo "       exit 1" && exit 1
+                        # fi
+                      # ELB LOOP STARTS HERE
+                      for ELB in ${elbArr[@]} $(echo $target_group | sed 's/,/ /'); do
+                        elb_operate attach $ELB ""$instance_ids""
+                      done
+                      # ELB LOOP ENDS HERE
+                      echo "DONE"
+                    break
+                  fi
+                  done
+}
+
+ansible_ad_hoc () {
+                    role_name="$1"
+                    hosts="$2"
+                    extra_vars="$3"
+                    function cleanup () { rm -rf $playbook_tmp ;}
+                    # echo -en "+++\nApplying '${role_name}' to $hosts\n"
+                    # if [ ! -z "$extra_vars" ]; then
+                    #   echo -en "with extra_vars - $extra_vars\n+++"
+                    # fi
+                    playbook_tmp=$(mktemp)
+
+# HEREDOC construction must not have any whitespaces at the beginning of a line:
+cat > $playbook_tmp <<EOPBOOK
+---
+- hosts: all
+  roles:
+  - $role_name
+EOPBOOK
+
+pb_extension=$(echo "$role_name" | cut -d "." -f 2)
+
+if [ "$pb_extension" == "yml" ] || \
+   [ "$pb_extension" == "yaml" ]; then
+    echo "ansible-playbook \"${role_abs_path}\" -i \""$hosts"\" -e \""$extra_vars"\""
+    ansible-playbook ${role_abs_path} -i "$hosts" -e "$extra_vars"
+    ans_exit_code=$?
+else
+    echo "ansible-playbook \"${playbook_tmp}\" -i \""$hosts"\" -e \""$extra_vars"\""
+    ansible-playbook ${playbook_tmp} -i "$hosts" -e "$extra_vars"
+    ans_exit_code=$?
+fi
+
+echo "exit code of ansible - $ans_exit_code" 
+
+if [ $ans_exit_code -ne 0 ] && [ -v attach ] ; then
+  for ELB in ${elbArr[@]} $(echo $target_group | sed 's/,/ /'); do
+    echo "warn: ansible playbook failed, attaching ec2 to elb as '-A' parameter is passed"
+    elb_operate attach $ELB ""$instance_ids""
+  done
+
+  exit 106;
+elif [ $ans_exit_code -ne 0 ] ; then
+   echo "exit code of ansible - $ans_exit_code"
+   echo "warn: ansible playbook failed ec2 stay detached as '-A' parameter is not passed"
+   exit 106;
+fi
+
+cleanup
+}
+main () { precheck; make_it_happen ;}
+
+while getopts "PADr:n:e:" OPTION; do
+  case $OPTION in
+    P ) export cloud="prod" ;;
+    A ) export attach="true" ;;
+    D ) export downtime="true" ;;
+    r ) export role_abs_path=$(readlink -m "$OPTARG");;
+    n ) export product_name_prefix="$OPTARG";;
+    e ) export extra_vars="$OPTARG";;
+    * ) usage && exit 1 ;;
+  esac
+done
+
+
+# tests if variable contains whitespaces - needed to avoid whitespaces passed to the script as an argument
+
+if [ -z "$product_name_prefix" ] ; then usage && failure "error:  You must provide SC product name prefix as argument, single string without whitespaces";
+fi
+
+export hosts=$(echo "$hosts" | tr -d ' ' )
+role_name=$(echo $role_abs_path | rev | cut -f 1 -d '/' | rev )
+role_dir=$(echo "$role_abs_path" | rev | cut -f 2- -d '/' | rev )
+
+export ANSIBLE_ROLES_PATH="$role_dir"
+if [ -z "$role_name" ] ;then
+     usage && failure "Error - Role(-r),Hosts(-i), are mandatory! EnvironmentVars(-e) is optional"
+elif [ ! -d "$role_abs_path" ] && [ ! -e "$role_abs_path" ] ; then
+     usage && failure "Error - Cannot find role \"$role_name\" in $role_dir"
+fi
+
+echo -en "
+debug:
+product_name_prefix - $product_name_prefix
+extra_vars          - $extra_vars
+role_abs_path       - $role_abs_path
+"
+
+main

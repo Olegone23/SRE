@@ -1,0 +1,13 @@
+---
+- hosts: localhost:all
+  roles:
+  - { role: devmount, when: init == 'true' }
+  - { role: dynatrace, when: env == 'wperf' or env == 'wprod' or (env == 'wstg' and svc_name == 'gh-lti')}
+  - { role: users,    when: init == 'true' }
+  - { role: java,     when: init == 'true' }
+  - { role: os-basic, when: init == 'true' }
+  - { role: filebeat, when: init == 'true' }
+  - { role: gh,     when: svc_name != 'gh-httpd' }
+  - { role: httpd,    when: svc_name == 'gh-httpd' }
+  - { role: tools,    when: init == 'true' }
+  - { role: os-patch, when: init == 'true' }

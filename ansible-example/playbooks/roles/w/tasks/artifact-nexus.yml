@@ -1,0 +1,37 @@
+---
+- name: get file extension
+  shell: curl -s "http://nexus.aws.gh.com:8081/nexus/service/local/lucene/search?g=com.gh.gh&a={{ svc_name }}&v={{ app_ver }}&repositoryId={{ build|lower }}s"|grep extension|grep -v pom| tr -d /| awk -F "<extension>" '{print $2}'
+  register: extension
+
+- name: Ensure that application artifacts have been removed
+  file:
+    path: "/opt/software/gh/{{ svc_name }}.{{ extension.stdout }}"
+    state: absent
+  become: true
+  become_method: sudo
+  become_user: appdata
+
+- name: copy config
+  copy:
+    src: "{{ item }}"
+    dest: "/opt/software/gh/"
+    owner: appdata
+    group: appdata
+    mode: 0644
+  become: true
+  become_method: sudo
+  become_user: appdata
+  with_fileglob:
+    - "{{env}}/{{svc_name}}/*"
+
+- name: Download artifact
+  maven_artifact:
+    extension: "{{ extension.stdout }}"
+    group_id: com.gh.gh
+    artifact_id: "{{ svc_name }}"
+    version: "{{ app_ver }}"
+    repository_url: 'http://nexus.aws.gh.com:8081/nexus/content/repositories/{{build|lower}}s/'
+    dest: "/opt/software/gh/{{ svc_name }}.{{ extension.stdout }}"
+  become: true
+  become_method: sudo
+  become_user: appdata

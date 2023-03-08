@@ -1,0 +1,428 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "(ASG) script - RHEL CentOS by AWS",
+  "Parameters" : {
+    "AMI" : {
+      "Description" : "AMI id - Specify either RHEL or CentOS",
+      "Default" : "ami-***",
+      "Type" : "String"
+    },
+
+    "InstanceType" : {
+      "Description" : "Application EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.small",
+      "AllowedValues" : [ "t2.micro", "t2.small", "t2.medium", "t2.large", "t2.xlarge",
+        "t3a.small", "t3a.medium", "t3a.large", "t3a.xlarge",
+        "t3.small", "t3.medium", "t3.large", "t3.xlarge",
+        "m1.small", "m1.medium","m1.large", "m1.xlarge",
+        "m2.xlarge", "m2.2xlarge", "m2.4xlarge",
+        "m3.medium", "m3.large", "m3.xlarge", "m3.2xlarge",
+        "m4.large", "m4.xlarge", "m4.2xlarge", "m4.4xlarge", "m4.10xlarge",
+        "m5.large", "m5.xlarge", "m5.2xlarge", "m5.4xlarge", "m5.10xlarge",
+        "c1.medium", "c1.xlarge",
+        "c3.large", "c3.xlarge", "c3.2xlarge", "c3.4xlarge", "c3.8xlarge",
+        "c4.large", "c4.xlarge", "c4.2xlarge", "c4.4xlarge", "c4.8xlarge",
+        "g2.2xlarge", "g2.8xlarge",
+        "r3.large", "r3.xlarge", "r3.2xlarge", "r3.4xlarge", "r3.8xlarge",
+        "i2.xlarge", "i2.2xlarge", "i2.4xlarge", "i2.8xlarge",
+        "d2.xlarge", "d2.2xlarge", "d2.4xlarge", "d2.8xlarge",
+        "hi1.4xlarge", "hs1.8xlarge", "cr1.8xlarge", "cc2.8xlarge", "cg1.4xlarge"
+      ]
+    },
+
+    "RequestID": {
+      "Default": "N/A",
+      "Description": "GIS request ID for tracking purposes (if one exists)",
+      "Type": "String"
+    },
+
+    "AwsVpcName" : {
+      "Default": "DEV",
+      "Description" : "AWS VPC name. Used to determine propper mapping of resources and will be stored in /etc/env_name",
+      "Type": "String",
+      "AllowedValues" : [ "DEV", "QA", "PROD" ]
+    },
+
+    "EnvName" : {
+      "Default": "wdev",
+      "Description" : "Application environment name",
+      "Type": "String"
+    },
+
+    "InstanceName" : {
+      "Default":"aue1ld***01",
+      "Description" : "Name that will be set for all instances in scaling group",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "64"
+    },
+
+    "ELBNames" : {
+      "Description" : "Comma Delimited List. If specified autoscaling group will be attached to these ELB instances",
+      "Type": "CommaDelimitedList",
+      "Default" : "",
+      "ConstraintDescription": "must be a valid name of existing ELB or empty"
+    },
+
+    "TargetGroup": {
+      "Default" : "arn:aws:elasticloadbalancing:us-east-1:***4:targetgroup/****-private-auth-dev-alb/a476d66d3c4f626a",
+      "Description" : "Comma Delimited List. If specified autoscaling group will be attached to these Target Groups",
+      "Type": "CommaDelimitedList",
+      "ConstraintDescription": "must be a valid ARN of existing TG or empty"
+    },
+
+    "HealthCheckType" : {
+      "Default" : "ELB",
+      "Description" : "If ELB is not specified then value is ignored and EC2 check is used",
+      "Type": "String",
+      "AllowedValues" : [ "ELB", "EC2" ]
+    },
+
+    "MinInstances" : {
+      "Default" : "1",
+      "Description" : "Min Number of instances in scaling group",
+      "Type" : "Number"
+    },
+
+    "MaxInstances" : {
+      "Default" : "1",
+      "Description" : "Max Number of instances in scaling group",
+      "Type" : "Number"
+    },
+
+    "DesiredCapacity" : {
+      "Default" : "1",
+      "Description" : "Number of instances scaling group will start with",
+      "Type" : "Number"
+    },
+    "ComponentName" : {
+      "Default" : "",
+      "Description" : "(DNS CNAME). Will be applied to a standalone instance only",
+      "Type": "String"
+    },
+
+    "DomainName" : {
+      "Default":"aws.***.com",
+      "Description" : "Domain name",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[a-zA-Z0-9.]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "AppVersion" : {
+      "Description" : "Application version",
+      "Type": "String"
+    },
+
+    "BuildType" : {
+      "Description" : "Application build type",
+      "Default": "release",
+      "Type": "String",
+      "AllowedValues" : [ "snapshot", "release" ]
+    },
+
+    "ServiceName" : {
+      "Description" : "Name of deploying service",
+      "Default": "SERVICENAME",
+      "Type": "String"
+    },
+
+    "Role" : {
+      "Description" : "IAM Role an EC2 instance is launched with",
+      "Default": "aws-nonprod-nextgen-resource-ec2",
+      "Type": "String"
+    }
+  },
+
+  "Conditions": {
+    "IsELBsSpecified": {"Fn::Not": [{"Fn::Equals": ["", {"Fn::Join": ["",{"Ref": "ELBNames"}]} ]} ]},
+    "IsTGsSpecified": {"Fn::Not": [{"Fn::Equals": ["", {"Fn::Join": ["",{"Ref": "TargetGroup"}]} ]} ]},
+    "IsEC2HCsRequired": {
+      "Fn::Or" : [
+        {"Fn::Not": [{"Fn::Equals": ["", {"Fn::Join": ["",{"Ref": "ELBNames"}]} ]} ]},
+        {"Fn::Not": [{"Fn::Equals": ["", {"Fn::Join": ["",{"Ref": "TargetGroup"}]} ]} ]}
+      ]
+    },
+    "IsMultiInstanceGroup": {"Fn::Not": [{"Fn::Equals": ["1", {"Ref": "MaxInstances"} ]} ]},
+    "IsProd": {"Fn::Equals": ["PROD", {"Ref": "AwsVpcName"} ]},
+    "IsPerf": {"Fn::Equals": ["wperf", {"Ref": "EnvName"} ]}
+  },
+
+  "Mappings" : {
+    "SubnetMap" : {
+      "DEV" : {
+        "AppA" : "subnet-***",
+        "AppB" : "subnet-***"
+      },
+      "QA" : {
+        "AppA" : "subnet-***",
+        "AppB" : "subnet-***"
+      },
+      "PROD" : {
+        "AppA" : "subnet-***",
+        "AppB" : "subnet-***"
+      }
+    },
+    "SecurityGroup":{
+      "SecurityGroups": {
+        "DEV" : "sg-***",
+        "QA"  : "sg-***",
+        "PROD": "sg-***"
+      }
+    },
+    "SecurityGroupProxy":{
+      "SecurityGroups": {
+        "DEV" : "sg-***",
+        "QA"  : "sg-***",
+        "PROD": "sg-***"
+      }
+    },
+
+    "ProxyMap" : {
+      "proxy" : {
+        "DEV" : "http://proxy-dev-ng.aws.***.com:8080",
+        "QA"  : "http://proxy-qa-ng.aws.***.com:8080",
+        "PROD": "http://proxy-prod-ng.aws.***.com:8080"
+      }
+    },
+
+    "ProxyName" : {
+      "proxy" : {
+        "DEV" : "proxy-dev-ng.aws.***.com",
+        "QA"  : "proxy-qa-ng.aws.***.com",
+        "PROD": "proxy-prod-ng.aws.***.com"
+      }
+    },
+
+    "KeyName" : {
+      "keys" :  {
+        "DEV" : "AWS-NONPROD-***",
+        "QA"  : "AWS-NONPROD-***",
+        "PROD": "AWS-PROD-***"
+      }
+    }
+  },
+
+  "Resources" : {
+    "ServiceGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "VPCZoneIdentifier" : [
+          { "Fn::FindInMap" : [ "SubnetMap", { "Ref" : "AwsVpcName" }, "AppA" ]},
+          { "Fn::FindInMap" : [ "SubnetMap", { "Ref" : "AwsVpcName" }, "AppB" ]}
+        ],
+        "LaunchConfigurationName" : { "Ref" : "LaunchConfig" },
+        "LoadBalancerNames" : {"Fn::If": ["IsELBsSpecified", {"Ref": "ELBNames"}, {"Ref": "AWS::NoValue"}]},
+        "TargetGroupARNs" : {"Fn::If": ["IsTGsSpecified", {"Ref": "TargetGroup"}, {"Ref": "AWS::NoValue"}]},
+        "MinSize" : { "Ref" : "MinInstances"},
+        "MaxSize" : { "Ref" : "MaxInstances"},
+        "DesiredCapacity" : { "Ref" : "DesiredCapacity"},
+
+        "HealthCheckType" : {"Fn::If": ["IsEC2HCsRequired", {"Ref": "HealthCheckType"}, "EC2"]},
+        "HealthCheckGracePeriod" : 2500,
+        "MetricsCollection" : [{
+          "Granularity" : "1Minute"
+        }],
+        "Tags": [
+          { "Key": "Name",            "Value": { "Ref" : "InstanceName" }, "PropagateAtLaunch": true },
+          { "Key": "Image_Id",        "Value": { "Ref" : "AMI"          }, "PropagateAtLaunch": true },
+          { "Key": "AwsVpcName",      "Value": { "Ref" : "AwsVpcName"   }, "PropagateAtLaunch": true },
+          { "Key": "DomainName",      "Value": { "Ref" : "DomainName"   }, "PropagateAtLaunch": true },
+          { "Key": "RequestID",       "Value": { "Ref" : "RequestID"    }, "PropagateAtLaunch": true },
+          { "Key": "ServiceName",     "Value": { "Ref" : "ServiceName"  }, "PropagateAtLaunch": true },
+          { "Key": "ServiceEnvName",  "Value": { "Ref" : "EnvName"      }, "PropagateAtLaunch": true },
+          { "Key": "ComponentName",   "Value": { "Ref" : "ComponentName"}, "PropagateAtLaunch": {"Fn::If": ["IsMultiInstanceGroup", false, true] }}
+        ]
+      },
+      "CreationPolicy" : {
+        "AutoScalingCreationPolicy" : {
+          "MinSuccessfulInstancesPercent" : 50 },
+        "ResourceSignal" : {
+          "Timeout" : "PT25M",
+          "Count"   : { "Ref" : "DesiredCapacity"}
+        }
+      }
+    },
+
+    "LaunchConfig" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Properties" : {
+        "KeyName" : { "Fn::FindInMap" : [ "KeyName", "keys", {"Ref":"AwsVpcName"} ]},
+        "ImageId" : { "Ref" : "AMI"},
+        "IamInstanceProfile" : { "Ref" : "Role"},
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "SecurityGroups" : [ { "Fn::FindInMap" : [ "SecurityGroup", "SecurityGroups", {"Ref":"AwsVpcName"} ]},
+          { "Fn::FindInMap" : [ "SecurityGroupProxy", "SecurityGroups", {"Ref":"AwsVpcName"} ]}],
+        "BlockDeviceMappings":[
+          {
+            "DeviceName":"/dev/sda1",
+            "Ebs":{
+              "DeleteOnTermination":"true"
+            }
+          },
+          {
+            "DeviceName":"/dev/sdf",
+            "Ebs":{
+              "Encrypted" : "True",
+              "VolumeSize":"10",
+              "DeleteOnTermination":"true"
+            }
+          },
+          {
+            "DeviceName":"/dev/sdg",
+            "Ebs":{
+              "Encrypted" : "True",
+              "VolumeSize":"20",
+              "DeleteOnTermination":"true"
+            }
+          }
+        ],
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -xe\n",
+
+          "echo 'export http_proxy=", { "Fn::FindInMap" : [ "ProxyMap", "proxy", {"Ref":"AwsVpcName"} ]}, "'>> /etc/environment\n",
+          "echo 'export https_proxy=", { "Fn::FindInMap" : [ "ProxyMap", "proxy", {"Ref":"AwsVpcName"} ]}, "'>> /etc/environment\n",
+          "echo 'export NO_PROXY=169.254.169.254,.aws.***.com,localhost,127.0.0.1' >> /etc/environment\n",
+          "source /etc/environment\n",
+
+          "setenforce 0\n",
+          "mkdir /opt/downloads\n",
+          "sed -i -e 's/SELINUX=.*/SELINUX=disabled/g' /etc/sysconfig/selinux\n",
+
+          "echo ",{ "Fn::Join": ["",[ { "Ref" : "AwsVpcName" } ]]}, "> /etc/env_name\n",
+
+          {"Fn::If": ["IsPerf", { "Fn::Join" : ["", [ "useradd tester\n", "echo tester | passwd --stdin tester\n" ]]}, "" ]},
+
+          "echo ",{ "Fn::Join": [".",[ {"Ref":"ComponentName"}, { "Ref" : "DomainName" } ]]}, "> /etc/dns_name\n",
+
+          "sed -e 's/requiretty/!requiretty/' -i.bak /etc/sudoers\n",
+          "echo \"\" >> /etc/ssh/sshd_config\n",
+          "echo \"Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr\" >> /etc/ssh/sshd_config\n",
+          "echo \"MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,umac-128@openssh.com\" >> /etc/ssh/sshd_config\n",
+          {"Fn::If": ["IsProd", "",
+            { "Fn::Join" : ["", [
+              "useradd sshtest\n",
+              "echo abc123 | passwd --stdin sshtest\n",
+              "usermod -a sshtest -G wheel\n",
+              "echo \"Match User sshtest,tester\" >> /etc/ssh/sshd_config\n",
+              "echo \"PasswordAuthentication yes\" >> /etc/ssh/sshd_config\n"
+            ]]}
+          ]},
+          "systemctl restart sshd.service\n",
+
+          "default_user=$(grep \" name:\" /etc/cloud/cloud.cfg | awk '{print $2}')\n",
+          "usermod -l awsadmin -d /home/awsadmin $default_user\n",
+          "groupmod -n awsadmin $default_user\n",
+          "mv /home/$default_user /home/awsadmin\n",
+          "sed -i -e s/$default_user/awsadmin/g /etc/sudoers\n",
+          "find /etc/sudoers.d/ -type f -exec sed -i -e s/$default_user/awsadmin/g {} \\;\n",
+
+          "yum-config-manager --enable rhui-REGION-rhel-server-extras || true\n",
+
+          "yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm\n",
+          "yum install -y python2-pip ansible wget git unzip python-lxml\n",
+          "pip install awscli\n",
+
+          "/bin/aws --region=us-east-1 s3 cp s3://aws-", {"Fn::If": ["IsProd", "prod", "nonprod"]}, "-deployment/wmuser-knlhe /opt/downloads/id_rsa\n",
+          "cp /opt/downloads/id_rsa /root/.ssh/id_rsa ; chmod 0600 /root/.ssh/id_rsa\n",
+          "ssh-keyscan github.com > ~/.ssh/known_hosts\n",
+          "cd /opt/downloads/ ; git clone git@github.com:***/do-***.git  && cd do-***/playbooks\n",
+
+          "ansible-playbook deploy.yml -e",
+          " init=true",
+          " -e app_ver=",  {"Ref":"AppVersion" },
+          " -e svc_name=", {"Ref":"ServiceName" },
+          " -e svc_user=appdata",
+          " -e env=",      {"Ref":"EnvName" },
+          " -e cloud=",    {"Fn::If": ["IsProd", "prod", "nonprod"]},
+          " -e build=",    {"Ref":"BuildType" },
+          " -e proxy=", { "Fn::FindInMap" : [ "ProxyName", "proxy", {"Ref":"AwsVpcName"} ]},
+          "\n",
+
+          "#=##make cloud formation helpers executable\n",
+          "yum install -y https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.amzn1.noarch.rpm\n",
+          "ln -s /usr/local/lib/python2.7/site-packages/cfnbootstrap /usr/lib/python2.7/site-packages/cfnbootstrap\n",
+          "chmod +x /opt/aws/bin/* \n",
+
+          "#=##signal successful instance spin-up for auto scaling group\n",
+          "#=##trailing '|| true' in the end of the command is used to suppress the error exit code\n",
+          "#=##that could happen if scaling group is already reached DesiredCapacity and thus is in CREATE_COMPLETE state\n",
+
+          "/opt/aws/bin/cfn-signal -e $? ",
+          "         --stack ", { "Ref" : "AWS::StackName" },
+          "         --resource ServiceGroup ",
+          "         --region ", { "Ref" : "AWS::Region" }, " || true\n",
+          "#rm -rf /opt/downloads\n"
+        ]]}
+        }
+      }
+    },
+
+    "ServiceScaleUpPolicy" : {
+      "Type" : "AWS::AutoScaling::ScalingPolicy",
+      "Condition": "IsMultiInstanceGroup",
+      "Properties" : {
+        "AdjustmentType" : "ChangeInCapacity",
+        "AutoScalingGroupName" : { "Ref" : "ServiceGroup" },
+        "Cooldown" : "60",
+        "ScalingAdjustment" : "1"
+      }
+    },
+    "ServiceScaleDownPolicy" : {
+      "Type" : "AWS::AutoScaling::ScalingPolicy",
+      "Condition": "IsMultiInstanceGroup",
+      "Properties" : {
+        "AdjustmentType" : "ChangeInCapacity",
+        "AutoScalingGroupName" : { "Ref" : "ServiceGroup" },
+        "Cooldown" : "60",
+        "ScalingAdjustment" : "-1"
+      }
+    },
+
+    "CPUAlarmHigh": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "IsMultiInstanceGroup",
+      "Properties": {
+        "AlarmDescription": "Scale-up if CPU > 90% for 10 minutes",
+        "MetricName": "CPUUtilization",
+        "Namespace": "AWS/EC2",
+        "Statistic": "Average",
+        "Period": "300",
+        "EvaluationPeriods": "2",
+        "Threshold": "90",
+        "AlarmActions": [ { "Ref": "ServiceScaleUpPolicy" } ],
+        "Dimensions": [
+          {
+            "Name": "AutoScalingGroupName",
+            "Value": { "Ref": "ServiceGroup" }
+          }
+        ],
+        "ComparisonOperator": "GreaterThanThreshold"
+      }
+    },
+    "CPUAlarmLow": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Condition": "IsMultiInstanceGroup",
+      "Properties": {
+        "AlarmDescription": "Scale-down if CPU < 70% for 10 minutes",
+        "MetricName": "CPUUtilization",
+        "Namespace": "AWS/EC2",
+        "Statistic": "Average",
+        "Period": "300",
+        "EvaluationPeriods": "2",
+        "Threshold": "70",
+        "AlarmActions": [ { "Ref": "ServiceScaleDownPolicy" } ],
+        "Dimensions": [
+          {
+            "Name": "AutoScalingGroupName",
+            "Value": { "Ref": "ServiceGroup" }
+          }
+        ],
+        "ComparisonOperator": "LessThanThreshold"
+      }
+    }
+  }
+}

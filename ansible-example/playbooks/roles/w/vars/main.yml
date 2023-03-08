@@ -1,0 +1,25 @@
+services:
+  gh-auth: http://localhost:8011/gh/api/v1/auth/version
+  gh-auth-service: http://localhost:8141/gh/api/v1/casauth/version
+  gh-meta: http://localhost:8021/gh/api/v1/meta/version
+  gh-content: http://localhost:8031/gh/api/v1/content/version
+  gh-course-setup-app: http://localhost:8061/gh/api/v1/courses/version
+  gh-lti: http://localhost:8091/gh/api/v1/lti/version
+  gh-search: http://localhost:8101/gh/api/v1/search/version
+  gh-notifications: http://localhost:8131/gh/api/v1/notifications/version
+  gh-sso: http://localhost:8121/gh/api/v1/sso/version
+  gh-outcome-service: http://localhost:8075/gh/api/v1/outcomes/version
+  gh-event-service: http://localhost:8076/gh/api/v1/event/version
+  gh-efour-sync: http://localhost:8111/gh/api/v1/e4sync/version
+  gh-canvas: http://localhost:8151/gh/api/v1/canvas-gateway/version
+  gh-courses: http://localhost:8161/gh/api/v2/courses/version
+  gh-announcements: http://localhost:8152/gh/api/v1/announcements/version
+  gh-ccs: http://localhost:8153/gh/api/v1/ccs/version
+  gh-lti-advantage: http://localhost:8154/gh/api/v1/ltiadvantage/version
+  ghplus-event-engine-app: http://localhost:8155/gh/api/v1/eventengine/version
+  gh-course-cartridge-service-app: http://localhost:8156/gh/api/v3/ccs/version
+  gh-lti-conversion-app: http://localhost:8157/gh/api/v1/lticonversion/version
+  gh-cd-pipeline: http://localhost:8158/gh/api/v1/cdpipeline/version
+  gh-course-org: http://localhost:8171/gh/api/v1/courseorgs/version
+  gh-cbarchival: http://localhost:8158/gh/api/v1/cbarchival/version
+  gh-ecommerce: http://localhost:8181/gh/api/testpath/v1/ecommerce/version

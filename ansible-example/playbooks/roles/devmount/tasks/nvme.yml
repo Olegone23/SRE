@@ -1,0 +1,48 @@
+---
+# tasks file for devmount
+- name: install nvme-cli
+  yum:
+    name: nvme-cli
+    state: present
+
+- name: create mount points
+  file: path={{ item }} state=directory
+  with_items:
+    - /opt/software
+    - /opt/logs
+
+- name: mapping disks
+  shell: diskLists=$(nvme list | cut -c1-12 | tail -n+4); for DISK in $diskLists; do diskName=$(nvme id-ctrl "$DISK" --raw-binary | cut -c3073-3104); if [[ "$diskName" == *"sdf"* ]]; then echo "$DISK"; break; fi; done
+  register: sdf
+
+- name: mapping disks
+  shell: diskLists=$(nvme list | cut -c1-12 | tail -n+4); for DISK in $diskLists; do diskName=$(nvme id-ctrl "$DISK" --raw-binary | cut -c3073-3104); if [[ "$diskName" == *"sdg"* ]]; then echo "$DISK"; break; fi; done
+  register: sdg
+
+- name: create filesystem /opt/software
+  filesystem: fstype=ext4 dev={{ sdf.stdout }}
+
+- name: create filesystem /opt/logs
+  filesystem: fstype=ext4 dev={{ sdg.stdout }}
+
+- name: get UUID for /opt/software
+  command: blkid {{ sdf.stdout }} -s UUID -o value
+  register: sdf_uuid
+
+- name: get UUID for /opt/logs
+  command: blkid {{ sdg.stdout }} -s UUID -o value
+  register: sdg_uuid
+
+- name: mount filesystem /opt/software
+  mount:
+    name: /opt/software
+    src: "UUID={{ sdf_uuid.stdout }}"
+    fstype: ext4
+    state: mounted
+
+- name: mount filesystem /opt/logs
+  mount:
+    name: /opt/logs
+    src: "UUID={{ sdg_uuid.stdout }}"
+    fstype: ext4
+    state: mounted

@@ -1,0 +1,30 @@
+---
+- name: Add scanaccount user
+  user:
+    name: scanaccount
+    comment: 'Security Admin Account'
+    shell: '/bin/bash'
+    createhome: 'yes'
+    system: 'no'
+    password: '7fd7s7d7fs7d7f7sdfsdfsdfsdf'
+
+- name: Add sudo privileges for scanaccount
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    line: "scanaccount ALL=(ALL) NOPASSWD: ALL"
+
+- name: Create .ssh directory
+  file:
+    path: /home/scanaccount/.ssh
+    state: directory
+    mode: 700
+    owner: scanaccount
+    group: scanaccount
+
+- name: Copy ssh RSA keys from awsadmin user
+  copy:
+    src: "/home/awsadmin/.ssh/authorized_keys"
+    dest: "/home/scanaccount/.ssh/authorized_keys"
+    owner: scanaccount
+    group: scanaccount

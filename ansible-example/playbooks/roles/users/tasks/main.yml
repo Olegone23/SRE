@@ -1,0 +1,76 @@
+---
+##tasks file for users
+- name: add jenkins group
+  group:
+    name: jenkins
+    state: present
+    system: yes
+
+- name: add devops and system accounts to nonprod
+  user: name={{ item.name }} state=present groups={{ item.groups }} comment={{ item.comment }} shell={{ item.shell }} createhome={{ item.createhome }} system={{ item.system }}
+  with_items:
+    - "{{ userdata }}"
+  when: cloud == "nonprod"
+
+- name: add devops accounts to prod
+  user: name={{ item.name }} state=present comment={{ item.comment }} shell={{ item.shell }} createhome={{ item.createhome }} system={{ item.system }}
+  with_items:
+    - "{{ userdata }}"
+  when:
+    - cloud == "prod"
+    - item.system == 'no'
+
+- name: add system accounts to prod
+  user: name={{ item.name }} state=present groups=jenkins comment={{ item.comment }} shell={{ item.shell }} createhome={{ item.createhome }} system={{ item.system }}
+  with_items:
+    - "{{ userdata }}"
+  when:
+    - cloud == "prod"
+    - item.system == 'yes'
+
+- name: Set authorized key took from file
+  authorized_key:
+    user: "{{ item.name }}"
+    state: present
+    key: "{{ item.rsakey }}"
+  with_items:
+    - "{{ userdata }}"
+  when: item.system == 'no'
+
+- name: make wheel nopasswd sudo
+  lineinfile:
+    dest: /etc/sudoers
+    state: present
+    regexp: '^%wheel\s'
+    line: '%wheel ALL=(ALL) NOPASSWD: ALL'
+    backup: yes
+  when: cloud == "nonprod"
+
+- name: "user: jenkins ssh dir"
+  file:
+    path: /home/jenkins/.ssh/
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: 0750
+
+- name: get ssh key for jenkins user
+  shell: "/bin/aws --region=us-east-1 s3 cp s3://aws-{{ cloud }}-gh/do_blobs/id_rsa /opt/downloads/id_rsa"
+
+- name: "user: add p_key to jenkins ssh dir"
+  copy:
+    src: /opt/downloads/id_rsa
+    dest: /home/jenkins/.ssh/id_rsa
+    owner: jenkins
+    group: jenkins
+    mode: 0600
+
+- name: "user: jenkins sshscan to git"
+  shell: "ssh-keyscan 192.168.108.198 > ~jenkins/.ssh/known_hosts; chown jenkins.jenkins ~jenkins/.ssh/known_hosts; chmod 0644 ~jenkins/.ssh/known_hosts"
+- name: "user: magic wipe"
+  file:
+    path: /opt/downloads/id_rsa
+    state: absent
+
+- name: add scanaccount user
+  import_tasks: scanaccount.yml

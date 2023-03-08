@@ -1,0 +1,313 @@
+#!/bin/bash
+#
+#
+export NO_PROXY=169.254.169.254
+export http_proxy=http://proxy-dev.aws.***.com:8080
+export https_proxy=http://proxy-dev.aws.***.com:8080
+export PATH=/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin
+#--
+declare command=$1
+declare params="${@:2}"
+declare args=$@
+#--
+if   [ "$command" == "start" ];  then declare cfg_file=$(readlink -f $2 2> /dev/null)
+elif [ "$command" == "update" ]; then declare cfg_file=$(readlink -f $3 2> /dev/null)
+fi
+#--
+usage      () { echo -en "usage:
+      $0 (start|kill|update) ARGS [--prod]
+      $0 start </path/to/config>
+      $0 kill <product-name>
+      $0 kill <product-name-PREFIX> <--multikill>
+      $0 update <product-name> </path/to/config> [--prod]
+" ;}
+unset_prod () { unset AWS_ACCESS_KEY_ID ; unset AWS_SECRET_ACCESS_KEY; unset AWS_SECURITY_TOKEN; }
+whereami   () { vpc_dilemma || set_prod ; }
+failure    () { unset_prod ; exit 1 ;}
+gen_token  () { openssl rand -base64 32 | sed -e 's/[^[:alnum:]]//g' | cut -c 1-7;}
+
+set_prod   () { /bin/aws sts assume-role --role-arn arn:aws:iam::***:role/aws-prod-devops-resource-ec2 --role-session-name "RoleSessionname" | /usr/local/bin/jq .Credentials > ./prod_creds
+                 export     AWS_ACCESS_KEY_ID="$(/usr/local/bin/jq -r .AccessKeyId prod_creds)"
+                 export    AWS_SECURITY_TOKEN="$(/usr/local/bin/jq -r .SessionToken prod_creds)"
+                 export AWS_SECRET_ACCESS_KEY="$(/usr/local/bin/jq -r .SecretAccessKey prod_creds)"
+
+                 rm prod_creds ; }
+
+full_scan  () { cmd="/bin/aws --region=us-east-1 servicecatalog scan-provisioned-products" ;
+                $cmd ; npt=$($cmd | /usr/local/bin/jq -r '.NextPageToken')
+                while [ $npt != "null"  ]; do
+                 $cmd --page-token "$npt" ; npt=$($cmd --page-token "$npt" | /usr/local/bin/jq -r '.NextPageToken')
+                done ; }
+checker    () { if [ "$command" != "start" ] && \
+                   [ "$command" != "update" ] && \
+                   [ "$command" != "kill" ]; then
+                   echo "error:  You need to specify a correct command" ; usage && failure
+                fi
+                whereami; }
+cfg_exists () { if [ -e "$cfg_file" ]; then true;
+                else echo "error:  Cannot find $cfg_file"; return 1 ;
+                fi ;
+#                echo "debug:  cfg_file path is $cfg_file"
+                # removing empty lines, and whitespaces
+                sed -i 's/\ *//g;/^\s*$/d' $cfg_file; source $cfg_file ;}
+vpc_dilemma() { for i in $args;
+                do
+                 if [ "$i" != "--prod" ]; then continue; else return 1 ; break ; fi;
+                done ; }
+mk_dilemma () { for i in $args;
+                do
+                 if [ "$i" != "--multikill" ]; then continue; else return 1 ; break ; fi
+                done ;}
+start      () { cfg_exists || failure
+                timestamp=$(date +%y%m%d%H%M%S)
+                # stack_number=$(full_scan | /usr/local/bin/jq -r --arg arn $product_name-$timestamp '.ProvisionedProducts[] | select( .Name == $arn ) |.Name' | wc -l);
+                # if [ $stack_number -ge 1 ]; then
+                #    echo "error:  Stack found! There should be none(!) with provided name - $product_name" && failure
+                # fi
+                if [ -z "$product_name" ] || \
+                   [ -z "$product_id" ]   || \
+                   [ -z "$artifact_id" ]; then
+                      echo "error:  Parameters missing in configuration file"
+                      echo "       \$product_name - $product_name"
+                      echo "       \$product_id   - $product_id"
+                      echo "       \$artifact_id  - $artifact_id"
+                fi
+                read_cfg   () { cat $cfg_file | sed -e 's/\ *//g' | grep -E "^[[:upper:]].*" | \
+                                while read line;
+                                do
+                                  echo Key=$(echo $line| cut -f 1 -d '='),Value=\"$(echo $line| cut -f 2 -d '=')\";
+                                done | tr '\n' ' '; echo '' ;}
+#                echo ":debug: :: read_cfg"
+                echo "info:  your product name is $product_name-$timestamp"
+
+                /bin/aws --region=us-east-1 servicecatalog provision-product \
+                --product-id $product_id \
+                --provisioning-artifact-id $artifact_id \
+                --provisioned-product-name $product_name-$timestamp \
+                --provision-token $product_name-$(gen_token) \
+                --provisioning-parameters $(read_cfg) > product
+
+                sleep 5
+
+                rec_id=$(/usr/local/bin/jq -r '.RecordDetail.RecordId' product)
+                if [ -z "$rec_id" ]; then echo "error: Empty variable \$rec_id, Unexpected error"
+                   failure
+                fi
+
+                sleep 5
+
+                while :
+                do
+                  sleep 3
+                  product_status=$( full_scan | \
+                                    /usr/local/bin/jq -r --arg arn $product_name-$timestamp '.ProvisionedProducts[] | select( .Name == $arn ) |.Status'
+                                  )
+                  if [ "$product_status" == "IN_PROGRESS" ] || \
+                     [ "$product_status" == "LAUNCHING" ]   || \
+                     [ "$product_status" == "UNDER_CHANGE" ]; then
+#                      echo "debug:  - product status is: $product_status"
+                      sleep 30
+                      continue
+                  fi
+                  if [ "$product_status" == "AVAILABLE" ]; then
+                     echo "info:  It's up and running. Have a nice day!" && unset_prod && exit 0
+                  else
+                     echo "error:  Something went definetely wrong! Product status is: $product_status"
+                     if [ -z "$product_status" ]; then
+                       echo -en "error:  Initialization failed. \$product_status doesn't have a value\n"
+                     fi
+                     error_msg=$(full_scan | \
+                                 /usr/local/bin/jq -r --arg arn $product_name '.ProvisionedProducts[] | select( .Name == $arn ) |.StatusMessage'
+                                )
+                     echo -en "error: \n" ; echo $error_msg ; failure ;
+                  fi
+                done ; }
+kill       () { mk_dilemma || export multikill="yes"
+                sleep 5
+                if [ "$multikill" != "yes" ]; then
+                     list=$(full_scan | /usr/local/bin/jq -r --arg arn $1 '.ProvisionedProducts[] | select( .Name == $arn )')
+                     #  echo "debug:  list is $list"
+                     #  echo "debug:  target is $target"
+                else
+                     list=$(full_scan | /usr/local/bin/jq -r --arg arn $1 '.ProvisionedProducts[] | select( .Name | contains ($arn))')
+                    #  echo "debug:  list is $list"
+                    #  echo "debug:  target is $target"
+                fi
+                target=$(echo $list | /usr/local/bin/jq -r '.Name' )
+                if [ -z "$target" ]; then echo "info:  No stacks found ($1). Exit 0" && exit 0
+                else
+                  echo "info:  Product(s) found:";
+                  echo $list | /usr/local/bin/jq -r '"           Name: " + .Name + "  Status: " + .Status'
+                # for i in $target; do echo "           $i"; done
+                fi
+                if [ "$multikill" == "yes" ]; then
+                  echo "+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - + "
+                  echo "warning:  You have set --multikill"
+                  echo "warning:  (We hope you know what you're doing)"
+                  echo "warning:  This is your LAST chance to abort this operation"
+                  echo "warning:  It will continue in 90 seconds"
+                  sleep 30
+                  echo "warning:  1 minute left before termination is invoked!"
+                  sleep 30
+                  echo "warning:  30 seconds left before termination is invoked!"
+                  sleep 30
+                  echo "warning:  - Proceeding to termination..You've been warned."
+                  echo "+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - + "
+                fi
+                for i in $target; do
+                  sleep 3;
+                  echo "info:  Processing - $i" ;
+                  # echo "debug:  fetching product IDs";
+                  product_id=$(echo $list | /usr/local/bin/jq -r --arg arn $i 'select( .Name == $arn )|.Id' )
+                  echo "info:  provisioned product id for $i is $product_id"
+                  i_token=$(echo $list | /usr/local/bin/jq -r --arg arn $i 'select( .Name == $arn )|.CreatedTime' | tr -d '.')
+                  # ----
+                  while :
+                  do
+                    product_status=$(full_scan | /usr/local/bin/jq -r --arg arn $i '.ProvisionedProducts[] | select( .Name == $arn )|.Status')
+                    if [ "$product_status" == "UNDER_CHANGE" ]; then
+                        echo "info: $i is $product_status; waiting 60 seconds to make another termination attempt";
+                        sleep 60
+                        continue
+                    else
+                        break
+                    fi
+                  done
+
+                  /bin/aws --region=us-east-1 servicecatalog terminate-provisioned-product --provisioned-product-id $product_id --terminate-token $i_token
+
+                    while :
+                    do
+                      product_status=$(full_scan | /usr/local/bin/jq -r --arg arn $i '.ProvisionedProducts[] | select( .Name == $arn )|.Status')
+                      if [ "$product_status" != "TERMINATED" ] && [ "$product_status" != "" ]; then
+                        sleep 61
+#                        echo "debug:  product status is $product_status"
+                        continue
+                      elif [ "$product_status" == "" ]; then
+                        echo "           $i - terminated!" ;
+                        break
+                      fi
+                    done
+                done ; }
+update     () { cfg_exists || failure
+                product_name=$1
+                blocks=$(full_scan | /usr/local/bin/jq -r --arg arn $product_name '.ProvisionedProducts[] | select( .Name | contains ($arn))');
+                stack=$(echo $blocks | /usr/local/bin/jq -r '.Name')
+                # stack_number=$(echo $stack | wc -l )
+                if (echo $stack | grep --quiet ' '); then
+                   echo -en "error:  T00 many stacks! There must be a single stack with provided name prefix($product_name):\n$stack\n" && failure
+                elif [ -z "$stack" ]; then
+                   echo -en "error:  No stacks found! There must be a single stack with provided name prefix: $product_name\n" && failure
+                fi
+                last_rec_id=$(echo $blocks | /usr/local/bin/jq -r '.LastRecordId' )
+                cf_stack_name=$(/bin/aws --region=us-east-1 servicecatalog describe-record --id $last_rec_id | \
+                                /usr/local/bin/jq '.RecordOutputs[].OutputValue' | cut -f 2 -d "/"
+                               )
+                product_id=$(echo $blocks | \
+                             /usr/local/bin/jq -r --arg arn $product_name 'select(.Name | contains ($arn)) | select ( .Status == "AVAILABLE") | .Id'
+                            )
+                if [ -z "$product_id" ]; then
+                   echo "error:  - No stacks found, there must be single AVAILABLE stack; see below:"
+                   echo $blocks | \
+                   /usr/local/bin/jq -r --arg arn $product_name 'select(.Name | contains ($arn)) | "Name: " + .Name + " Status: " + .Status ' | column -t
+                   failure
+#                else
+#                  echo -en "debug: \n$blocks\n"
+                fi
+                ts_prev=`date -d $(/bin/aws --region=us-east-1 cloudformation describe-stack-events --stack-name $cf_stack_name | \
+                         grep -v ResourceProperties | /usr/local/bin/jq -r '.StackEvents[0]| select (.ResourceType == "AWS::CloudFormation::Stack")| .Timestamp') +"%s"
+                        `
+                if [ -z "$last_rec_id" ] || \
+                   [ -z "$cf_stack_name" ] || \
+                   [ -z "$ts_prev" ]; then
+                  echo "error: : can't fetch some of mandatory parameters:"
+                  echo -en "\$last_rec_id - $last_rec_id
+                            \$cf_stack_name - $cf_stack_name
+                            \$ts_prev - $ts_prev\n"
+                  failure
+                fi
+                # inner fun No.1
+                update_cfg () { cf_params=$(/bin/aws --region=us-east-1 cloudformation describe-stacks --stack-name $cf_stack_name | \
+                                            jq -r '.Stacks[].Parameters[].ParameterKey'
+                                           )
+                                if [ -z "$cf_params" ]; then
+                                   echo "error:  Can't fetch CF parameters in Cloudformation." && failure
+                                fi
+                                update_params=$(cat $cfg_file | sed -e 's/\ *//g' | cut -f 1 -d '=')
+
+                                # echo
+                                  # inner fun No.2
+                                contains () { for i in $update_params;
+                                              do
+                                                if [ "$1" == "$i" ]; then return  1;fi
+                                              done
+                                             }
+                                for cf_elem in $cf_params;
+                                do
+                                  contains $cf_elem;
+                                  if [ $? -eq 1 ]; then
+                                      echo "Key=$cf_elem,Value=$(grep "$cf_elem=*" $cfg_file | cut -f 2 -d '='),UsePreviousValue=false" | tr '\n' ' '
+                                    else
+                                      echo "Key=$cf_elem,UsePreviousValue=true" | tr '\n' ' '
+                                  fi
+                                done
+                              }
+
+                echo 'info:  Product/Stack update'
+                echo "           CF: Last record ID is $last_rec_id"
+                echo "           CF: CF_STACK_NAME is $cf_stack_name"
+
+                if [ "$CFT_UPDATE" == 'true' ]; then
+                  /bin/aws --region=us-east-1 servicecatalog update-provisioned-product \
+                  --update-token $(gen_token) \
+                  --provisioned-product-id "${product_id}" \
+                  --product-id "$PRODUCT" \
+                  --provisioning-artifact-id "$ARTIFACT" \
+                  --provisioning-parameters $(update_cfg)
+                else
+                  /bin/aws --region=us-east-1 servicecatalog update-provisioned-product \
+                  --update-token $(gen_token) \
+                  --provisioned-product-id "${product_id}" \
+                  --provisioning-parameters $(update_cfg)
+                fi
+
+                echo 'info:  Update command invoked'
+
+                while :
+                do
+                  sleep 4
+                  product_status=$(full_scan | /usr/local/bin/jq -r --arg arn $product_name '.ProvisionedProducts[] | select(.Name | contains ($arn))|.Status')
+                  echo "           product_status : $product_status"
+                  if
+                     [ "$product_status" == "UNDER_CHANGE" ]; then
+                       sleep 10
+                       continue
+                  elif [ "$product_status" == "AVAILABLE" ]; then
+                       echo "           product_status : $product_status"
+                       echo "info:  SC update is completed"
+                       break
+                  else
+                       echo "error:  Unexpected error, exit 1"
+                       echo "           product_status : $product_status"
+                       exit 1
+                  fi
+                done
+                ts_upd=`date -d $(/bin/aws --region=us-east-1 cloudformation describe-stack-events --stack-name $cf_stack_name | \
+                        /usr/local/bin/jq -r '.StackEvents[0]| select (.ResourceType == "AWS::CloudFormation::Stack")| .Timestamp') +"%s"
+                        `
+                echo "info:  Cloudformation events check:"
+                echo "           \$ts_prev - $ts_prev"
+                echo "           \$ts_upd  - $ts_upd"
+
+                if [ $ts_prev -eq $ts_upd ]; then
+                  echo "warning:  No changes applied to cloudformation stack"
+                  echo "warning:  Though this could be a normal behaviour"
+                else
+                  echo "info:  Timestamps seem OK - CloudFormation stack update completed"
+                  exit 0
+                fi
+              }
+
+main       () { checker ; $command "${@:1}" ;}
+#--
+main $params

@@ -1,0 +1,10 @@
+---
+- name: Install OpenJDK 8
+  include_tasks: "openjdk8.yml"
+  when:
+    - svc_name != 'gh-course-org'
+    - svc_name != 'gh-cbarchival'
+    - svc_name != 'gh-ecommerce'
+
+- name: Install OpenJDK 11
+  include_tasks: "openjdk11.yml"

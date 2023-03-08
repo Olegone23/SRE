@@ -1,0 +1,14 @@
+---
+# tasks file for tools
+
+- name: Install CloudWatch Monitoring Scripts
+  import_tasks: cwmon.yml
+
+- name: Install CrowdStrike Falcon Sensor
+  import_tasks: cstrike.yml
+
+- name: Install SNMP for SolarWinds
+  import_tasks: snmp.yml
+
+- name: Resolve security dependencies
+  import_tasks: security.yml

@@ -1,0 +1,46 @@
+---
+# vars file for users
+env: nonprod
+userdata:
+  - { name: 'jenkins',
+      comment: 'daemon account',
+      groups: 'jenkins',
+      shell: '/bin/bash',
+      createhome: 'yes',
+      system: 'no',
+      rsakey: 'ssh-rsa  jenkins@jenkins.aws.gh.com' }
+  - { name: 'osumarokov',
+      comment: 'Moscow <osumarokov@gh.com>',
+      groups: 'wheel',
+      shell: '/bin/bash',
+      createhome: 'yes',
+      system: 'no',
+      rsakey: 'ssh-rsa  Oleg' }
+  - { name: 'sshcherban',
+      comment: 'Moscow <sshcherban@gh.com>',
+      groups: 'wheel',
+      shell: '/bin/bash',
+      createhome: 'yes',
+      system: 'no',
+      rsakey: 'ssh-rsa  sscherban@wwl-nout9' }
+  - { name: 'vutratenko',
+      comment: 'Moscow <vutratenko@gh.com>',
+      groups: 'wheel',
+      shell: '/bin/bash',
+      createhome: 'yes',
+      system: 'no',
+      rsakey: 'ssh-rsa  vutraten@jwsruws11' }
+  - { name: 'isidorov',
+      comment: 'Moscow <isidorov@gh.com>',
+      groups: 'wheel',
+      shell: '/bin/bash',
+      createhome: 'yes',
+      system: 'no',
+      rsakey: 'ssh-rsa igor@igor-All-Series'}
+  - { name: 'swong',
+      comment: 'Hoboken <swong@gh.com>',
+      groups: 'wheel',
+      shell: '/bin/bash',
+      createhome: 'yes',
+      system: 'no',
+      rsakey: 'ssh-rsa  swong@vmessauto01'}
